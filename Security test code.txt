@@ -1,0 +1,132 @@
+(*--The public channel(define open channel)--*)
+free ch: channel.
+ 
+(*--The basic type(define the basic type)--*)
+type participant.
+type nonce.
+type fingerprint.
+type key.
+type timestamp.
+type integer.
+ 
+(*--BH operation(define fingerprint data extraction function)--*)
+fun BH(bitstring, fingerprint): bitstring.
+ 
+(*--Hash operation(define hash function)--*)
+fun Hash(bitstring): bitstring.
+ 
+(*--XOR operation(define XOR operation)--*)
+fun XOR(bitstring, bitstring): bitstring.
+equation forall x: bitstring, y: bitstring;
+XOR(XOR(x, y), y) = x.
+ 
+(*--Concat operation(define join operation)--*)
+fun Con(bitstring, bitstring): bitstring.
+ 
+(*--Check timestamp Fresh operation(define timestamp freshness judgment function)--*)
+fun checktimestampfresh(timestamp, bool): bool
+reduc forall T: timestamp;
+checktimestampfresh(T, true) = true
+otherwise forall T: timestamp;
+checktimestampfresh(T, false) = false.
+ 
+(*--Shared key encryption(define symmetric encryption and decryption function)--*)
+fun encrypt(bitstring, key): bitstring.
+reduc forall x: bitstring, y: key;
+decrypt(encrypt(x, y), y) = x.
+ 
+(*--Add operation(define addition and subtraction operation)--*)
+fun addk(integer,integer): integer.
+reduc forall x: integer, k: integer;
+mink(addk(x,k),k) = x.
+ 
+(*--Type convertion--*)
+fun keytobit(key): bitstring [data, typeConverter].
+fun nontobit(nonce): bitstring [data, typeConverter].
+fun bittokey(bitstring): key [data, typeConverter].
+fun timetobit(timestamp): bitstring [data, typeConverter].
+fun inttobit(integer): bitstring [data, typeConverter].
+fun bittofinger(bitstring): fingerprint [data, typeConverter].
+fun nontofinger(nonce): fingerprint [data, typeConverter].
+ 
+(*--Secrecy assumptions
+not attacker(new KSS).--*)
+ 
+(*--The basic variables--*)
+free GW, SN: participant. (*---two participants in the proposed scheme--*)
+ 
+(*--Authentication queries--*)
+event GSbegin(participant).
+event GSend(participant).
+event SGbegin(participant).
+event SGend(participant).
+ 
+query x: participant; inj-event(GSend(x)) ==> inj-event(GSbegin(x)).
+query x: participant; inj-event(SGend(x)) ==> inj-event(SGbegin(x)).
+ 
+(*--Queries--*)
+free secnameA, secnameB: bitstring [private].
+query attacker(secnameA);
+     attacker(secnameB).
+ 
+(*--Role of the GW with identity GID--*)
+let processGW(SRAM_GW: fingerprint, ADDR_GW: bitstring, SID: bitstring, Ser_Num: integer) = 
+         event SGbegin(SN);
+        let PUF_GW = BH(ADDR_GW, SRAM_GW) in
+        let GID = Hash(PUF_GW) in
+         new Pos: nonce;
+        let MPos = XOR(nontobit(Pos), Hash(Con(Con(GID, SID), inttobit(Ser_Num)))) in
+        let V = Hash(Con(Con(nontobit(Pos), GID), inttobit(Ser_Num))) in
+         out(ch, (MPos, V, true));
+ 
+         in(ch, (M: bitstring, APS: bitstring, isTrue: bool));
+        let R' = XOR(M, Hash(Con(Con(SID, GID), nontobit(Pos)))) in
+        let IDF' = Hash(Con(Con(GID, SID), R')) in
+        let K = BH(nontobit(Pos), bittofinger(IDF')) in
+        let Pos' = decrypt(APS, bittokey(K)) in
+         if Pos' = nontobit(Pos) then
+         new k: integer;
+        let SK = K in
+        let Ser_Num = addk(Ser_Num, k) in
+        out(ch, (Ser_Num, true));
+        event GSend(GW);
+        out(ch, encrypt(secnameA, bittokey(SK))).
+ 
+(*--Role of the sensor node with identity SID--*)
+let processSN(SRAM_SN: fingerprint, ADDR_SN: bitstring, GID: bitstring, Ser_Num: integer) = 
+        in(ch, (MPos: bitstring, V: bitstring, isTrue: bool));
+        event GSbegin(GW);
+       let PUF_SN = BH(ADDR_SN, SRAM_SN) in
+       let SID = Hash(PUF_SN) in
+       let Pos' = XOR(MPos, Hash(Con(Con(GID, SID), inttobit(Ser_Num)))) in
+       let V' = Hash(Con(Con(Pos', GID), inttobit(Ser_Num))) in
+        if V' = V then
+        new R: nonce;
+       let IDF = Hash(Con(Con(GID, SID), nontobit(R))) in
+       let K' = BH(Pos', bittofinger(IDF)) in
+       let M = XOR(nontobit(R), Hash(Con(Con(SID, GID), Pos'))) in
+       let APS = encrypt(Pos', bittokey(K')) in
+        out(ch, (M, APS, true));
+ 
+        in(ch, (Ser_Num: integer));
+        new k: integer;
+       let SK = K' in
+       let Ser_Num = addk(Ser_Num, k) in
+        event SGend(SN);
+        out(ch, encrypt(secnameB, bittokey(SK))).
+ 
+(*--Start process--*)
+process
+        new SRAM_GW: fingerprint;
+        new ADDR_GW: bitstring;
+        new SRAM_SN: fingerprint;
+        new ADDR_SN: bitstring;
+        new GID: bitstring;
+        new SID: bitstring;
+        new Ser_Num: integer;
+(
+          (*-- Launch an unbounded number of sessions of the GW--*)
+          (!processGW(SRAM_GW, ADDR_GW, SID, Ser_Num)) |
+          (*-- Launch an unbounded number of sessions of the SN--*)
+          (!processSN(SRAM_SN, ADDR_SN, GID, Ser_Num))
+)
